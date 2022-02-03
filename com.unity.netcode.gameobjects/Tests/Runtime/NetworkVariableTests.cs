@@ -232,6 +232,113 @@ namespace Unity.Netcode.RuntimeTests
             Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, "Timed out waiting for client-side NetworkVariable to update!");
         }
 
+        public class NetworkListPredicate : ConditionalPredicateBase
+        {
+            private List<int> m_TestValues = new List<int>() { 111, 222, 333 };
+
+            private Dictionary<NetworkListTestStates, Func<bool>> m_StateFunctions;
+
+            // Player1 component on the Server
+            private NetworkVariableTest m_Player1OnServer;
+
+            // Player1 component on client1
+            private NetworkVariableTest m_Player1OnClient1;
+
+            public enum NetworkListTestStates
+            {
+                Add,
+                ContainsLarge,
+                Contains,
+                Remove,
+                Insert,
+                IndexOf,
+                ArrayOperator,
+            }
+
+            private NetworkListTestStates m_NetworkListTestState;
+
+            public void SetNetworkListTestState(NetworkListTestStates networkListTestState)
+            {
+                m_NetworkListTestState = networkListTestState;
+            }
+
+            protected override bool OnHasConditionBeenReached()
+            {
+                var isStateRegistered = m_StateFunctions.ContainsKey(m_NetworkListTestState);
+                Assert.IsTrue(isStateRegistered);
+                return isStateRegistered ? m_StateFunctions[m_NetworkListTestState].Invoke() : false;
+            }
+
+            protected override void OnFinished()
+            {
+                Assert.IsFalse(TimedOut, $"{nameof(NetworkListPredicate)} timed out waiting for the {m_NetworkListTestState} condition to be reached!");
+            }
+
+            private bool OnAdd()
+            {
+                var listCount = m_Player1OnServer.TheList.Count;
+                bool hasCorrectCountAndValues = m_Player1OnServer.TheList.Count == listCount &&
+                       m_Player1OnClient1.TheList.Count == listCount &&
+                       m_Player1OnServer.ListDelegateTriggered &&
+                       m_Player1OnClient1.ListDelegateTriggered;
+
+                // Check the client values against the server values to make sure they match
+                for (int i = 0; i < listCount; i++)
+                {
+                    hasCorrectCountAndValues = hasCorrectCountAndValues && m_Player1OnServer.TheList[i] == m_Player1OnClient1.TheList[i];
+                    if (!hasCorrectCountAndValues)
+                    {
+                        break;
+                    }
+                }
+                return hasCorrectCountAndValues;
+            }
+
+            private bool OnContainsLarge()
+            {
+                return false;
+            }
+
+            private bool OnContains()
+            {
+                return false;
+            }
+
+            private bool OnRemove()
+            {
+                return false;
+            }
+
+            private bool OnInsert()
+            {
+                return false;
+            }
+
+            private bool OnIndexOf()
+            {
+                return false;
+            }
+
+            private bool OnArrayOperator()
+            {
+                return false;
+            }
+
+            public NetworkListPredicate(NetworkVariableTest player1OnServer, NetworkVariableTest player1OnClient1)
+            {
+                m_Player1OnServer = player1OnServer;
+                m_Player1OnClient1 = player1OnClient1;
+                m_StateFunctions = new Dictionary<NetworkListTestStates, Func<bool>>();
+                m_StateFunctions.Add(NetworkListTestStates.Add, OnAdd);
+                m_StateFunctions.Add(NetworkListTestStates.ContainsLarge, OnContainsLarge);
+                m_StateFunctions.Add(NetworkListTestStates.Contains, OnContains);
+                m_StateFunctions.Add(NetworkListTestStates.Remove, OnRemove);
+                m_StateFunctions.Add(NetworkListTestStates.Insert, OnInsert);
+                m_StateFunctions.Add(NetworkListTestStates.IndexOf, OnIndexOf);
+                m_StateFunctions.Add(NetworkListTestStates.ArrayOperator, OnArrayOperator);
+            }
+        }
+
         [UnityTest]
         public IEnumerator NetworkListAdd([Values(true, false)] bool useHost)
         {

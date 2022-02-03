@@ -38,7 +38,6 @@ namespace Unity.Netcode.RuntimeTests
         /// <param name="checkForCondition">condition checking function that is passed valueToCompare to compare against</param>
         /// <param name="valueToCompare">the value to compare against</param>
         /// <param name="timeOutHelper">optional custom time out helper-handler</param>
-        /// <returns></returns>
         protected IEnumerator WaitForConditionOrTimeOut<T>(Func<T, bool> checkForCondition, T valueToCompare, TimeOutHelper timeOutHelper = null)
         {
             if (checkForCondition == null)
@@ -72,6 +71,43 @@ namespace Unity.Netcode.RuntimeTests
             }
             // Stop checking for a timeout
             timeOutHelper.Stop();
+        }
+
+        /// <summary>
+        /// This version accepts an IConditionalPredicate implementation to provide
+        /// more flexibility when the condition to be reached involves more than one
+        /// value to be checked.
+        /// </summary>
+        protected IEnumerator WaitForConditionOrTimeOut(IConditionalPredicate conditionalPredicate, TimeOutHelper timeOutHelper = null)
+        {
+            if (conditionalPredicate == null)
+            {
+                throw new ArgumentNullException($"checkForCondition cannot be null!");
+            }
+
+            // If none is provided we use the default global time out helper
+            if (timeOutHelper == null)
+            {
+                timeOutHelper = s_GloabalTimeOutHelper;
+            }
+
+            // Start checking for a timeout
+            timeOutHelper.Start();
+            conditionalPredicate.Started();
+            while (!timeOutHelper.HasTimedOut())
+            {
+                // Update and check to see if the condition has been met
+                if (conditionalPredicate.HasConditionBeenReached())
+                {
+                    break;
+                }
+
+                // Otherwise wait for 1 tick interval
+                yield return m_DefaultWaitForTick;
+            }
+            // Stop checking for a timeout
+            timeOutHelper.Stop();
+            conditionalPredicate.Finished(timeOutHelper.TimedOut);
         }
 
         [UnitySetUp]
@@ -270,5 +306,53 @@ namespace Unity.Netcode.RuntimeTests
         {
             m_TimeOutPeriod = timeOutPeriod;
         }
+    }
+
+    public class ConditionalPredicateBase : IConditionalPredicate
+    {
+        private bool m_TimedOut;
+
+        public bool TimedOut { get { return m_TimedOut; } }
+
+        protected virtual bool OnHasConditionBeenReached()
+        {
+            return true;
+        }
+
+        public bool HasConditionBeenReached()
+        {
+            return OnHasConditionBeenReached();
+        }
+
+        protected virtual void OnStarted()
+        {
+
+        }
+
+        public void Started()
+        {
+            OnStarted();
+        }
+
+        protected virtual void OnFinished()
+        {
+
+        }
+
+        public void Finished(bool timedOut)
+        {
+            m_TimedOut = timedOut;
+            OnFinished();
+        }
+    }
+
+    public interface IConditionalPredicate
+    {
+        bool HasConditionBeenReached();
+
+        void Started();
+
+        void Finished(bool timedOut);
+
     }
 }
