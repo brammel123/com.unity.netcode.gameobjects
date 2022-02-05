@@ -88,6 +88,8 @@ namespace Unity.Netcode.RuntimeTests
         // Player1 component on client1
         private NetworkVariableTest m_Player1OnClient1;
 
+        private NetworkListPredicate m_NetworkListPredicateHandler;
+
         private bool m_EnsureLengthSafety;
 
         public NetworkVariableTests(bool ensureLengthSafety)
@@ -234,7 +236,7 @@ namespace Unity.Netcode.RuntimeTests
 
         public class NetworkListPredicate : ConditionalPredicateBase
         {
-            private List<int> m_TestValues = new List<int>() { 111, 222, 333 };
+            private const int k_BaseValue = 111;
 
             private Dictionary<NetworkListTestStates, Func<bool>> m_StateFunctions;
 
@@ -243,6 +245,8 @@ namespace Unity.Netcode.RuntimeTests
 
             // Player1 component on client1
             private NetworkVariableTest m_Player1OnClient1;
+
+            private string m_TestStageFailedMessage;
 
             public enum NetworkListTestStates
             {
@@ -266,12 +270,37 @@ namespace Unity.Netcode.RuntimeTests
             {
                 var isStateRegistered = m_StateFunctions.ContainsKey(m_NetworkListTestState);
                 Assert.IsTrue(isStateRegistered);
-                return isStateRegistered ? m_StateFunctions[m_NetworkListTestState].Invoke() : false;
+                return m_StateFunctions[m_NetworkListTestState].Invoke();
             }
 
             protected override void OnFinished()
             {
-                Assert.IsFalse(TimedOut, $"{nameof(NetworkListPredicate)} timed out waiting for the {m_NetworkListTestState} condition to be reached!");
+                Assert.IsFalse(TimedOut, $"{nameof(NetworkListPredicate)} timed out waiting for the {m_NetworkListTestState} condition to be reached! \n" + OnConditionFailed());
+            }
+
+            private bool VerifyData()
+            {
+                // Wait until both sides have the same number of elements
+                if (m_Player1OnServer.TheList.Count != m_Player1OnClient1.TheList.Count)
+                {
+                    return false;
+                }
+
+                // Check the client values against the server values to make sure they match
+                for (int i = 0; i < m_Player1OnServer.TheList.Count; i++)
+                {
+                    if (m_Player1OnServer.TheList[i] != m_Player1OnClient1.TheList[i])
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            private string OnConditionFailed()
+            {
+                return $"{m_NetworkListTestState} condition test failed:\n Server List Count: { m_Player1OnServer.TheList.Count} vs  Client List Count: { m_Player1OnClient1.TheList.Count}\n" +
+                    $"Server List Count: { m_Player1OnServer.TheLargeList.Count} vs  Client List Count: { m_Player1OnClient1.TheLargeList.Count}\n" +
+                    $"Server Delegate Triggered: {m_Player1OnServer.ListDelegateTriggered} | Client Delegate Triggered: {m_Player1OnClient1.ListDelegateTriggered}\n";
             }
 
             private bool OnAdd()
@@ -282,41 +311,54 @@ namespace Unity.Netcode.RuntimeTests
                        m_Player1OnServer.ListDelegateTriggered &&
                        m_Player1OnClient1.ListDelegateTriggered;
 
-                // Check the client values against the server values to make sure they match
-                for (int i = 0; i < listCount; i++)
-                {
-                    hasCorrectCountAndValues = hasCorrectCountAndValues && m_Player1OnServer.TheList[i] == m_Player1OnClient1.TheList[i];
-                    if (!hasCorrectCountAndValues)
-                    {
-                        break;
-                    }
-                }
-                return hasCorrectCountAndValues;
+                return hasCorrectCountAndValues && VerifyData();
             }
 
             private bool OnContainsLarge()
             {
-                return false;
+                return m_Player1OnServer.TheLargeList.Count == m_Player1OnClient1.TheLargeList.Count;
             }
 
             private bool OnContains()
             {
-                return false;
+                // Wait until both sides have the same number of elements
+                if (m_Player1OnServer.TheList.Count != m_Player1OnClient1.TheList.Count)
+                {
+                    return false;
+                }
+
+                // Parse through all server values and use the NetworkList.Contains method to check if the value is in the list on the client side
+                foreach (var serverValue in m_Player1OnServer.TheList)
+                {
+                    if (!m_Player1OnClient1.TheList.Contains(serverValue))
+                    {
+                        return false;
+                    }
+                }
+                return true;
             }
 
             private bool OnRemove()
             {
-                return false;
+                return VerifyData();
             }
 
             private bool OnInsert()
             {
-                return false;
+                return VerifyData();
             }
 
             private bool OnIndexOf()
             {
-                return false;
+                foreach(var serverSideValue in m_Player1OnServer.TheList)
+                {
+                    var indexToTest = m_Player1OnServer.TheList.IndexOf(serverSideValue);
+                    if (indexToTest != m_Player1OnServer.TheList.IndexOf(serverSideValue))
+                    {
+                        return false;
+                    }
+                }
+                return true;
             }
 
             private bool OnArrayOperator()
@@ -324,8 +366,9 @@ namespace Unity.Netcode.RuntimeTests
                 return false;
             }
 
-            public NetworkListPredicate(NetworkVariableTest player1OnServer, NetworkVariableTest player1OnClient1)
+            public NetworkListPredicate(NetworkVariableTest player1OnServer, NetworkVariableTest player1OnClient1, NetworkListTestStates networkListTestState, int elementCount)
             {
+                m_NetworkListTestState = networkListTestState;
                 m_Player1OnServer = player1OnServer;
                 m_Player1OnClient1 = player1OnClient1;
                 m_StateFunctions = new Dictionary<NetworkListTestStates, Func<bool>>();
@@ -336,6 +379,21 @@ namespace Unity.Netcode.RuntimeTests
                 m_StateFunctions.Add(NetworkListTestStates.Insert, OnInsert);
                 m_StateFunctions.Add(NetworkListTestStates.IndexOf, OnIndexOf);
                 m_StateFunctions.Add(NetworkListTestStates.ArrayOperator, OnArrayOperator);
+
+                if (networkListTestState == NetworkListTestStates.ContainsLarge)
+                {
+                    for (var i = 0; i < elementCount; ++i)
+                    {
+                        m_Player1OnServer.TheLargeList.Add(new FixedString128Bytes());
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < elementCount; i++)
+                    {
+                        m_Player1OnServer.TheList.Add(i * k_BaseValue);
+                    }
+                }
             }
         }
 
@@ -343,211 +401,73 @@ namespace Unity.Netcode.RuntimeTests
         public IEnumerator NetworkListAdd([Values(true, false)] bool useHost)
         {
             yield return InitializeServerAndClients(useHost);
-            m_Player1OnServer.TheList.Add(k_TestVal1);
-            m_Player1OnServer.TheList.Add(k_TestVal2);
-
-            bool TestCompleted(int listCount)
-            {
-                bool hasCorrectCountAndValues = m_Player1OnServer.TheList.Count == listCount &&
-                       m_Player1OnClient1.TheList.Count == listCount &&
-                       m_Player1OnServer.ListDelegateTriggered &&
-                       m_Player1OnClient1.ListDelegateTriggered;
-
-                // Check the client values against the server values to make sure they match
-                for (int i = 0; i < listCount; i++)
-                {
-                    hasCorrectCountAndValues = hasCorrectCountAndValues && m_Player1OnServer.TheList[i] == m_Player1OnClient1.TheList[i];
-                    if (!hasCorrectCountAndValues)
-                    {
-                        break;
-                    }
-                }
-                return hasCorrectCountAndValues;
-            }
-
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"Timed out waiting for {nameof(NetworkListAdd)} to complete its test!");
+            m_NetworkListPredicateHandler = new NetworkListPredicate(m_Player1OnServer, m_Player1OnClient1, NetworkListPredicate.NetworkListTestStates.Add,10);
+            yield return WaitForConditionOrTimeOut(m_NetworkListPredicateHandler);
         }
 
         [UnityTest]
         public IEnumerator WhenListContainsManyLargeValues_OverflowExceptionIsNotThrown([Values(true, false)] bool useHost)
         {
             yield return InitializeServerAndClients(useHost);
-            var numberOfEntries = 20;
-            for (var i = 0; i < numberOfEntries; ++i)
-            {
-                m_Player1OnServer.TheLargeList.Add(new FixedString128Bytes());
-            }
-
-            bool TestCompleted(int listCount)
-            {
-                return m_Player1OnServer.TheLargeList.Count == listCount &&
-                       m_Player1OnClient1.TheLargeList.Count == listCount;
-            }
-
-            yield return WaitForConditionOrTimeOut(TestCompleted, numberOfEntries);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"Timed out waiting for {nameof(WhenListContainsManyLargeValues_OverflowExceptionIsNotThrown)} to complete its test!");
+            m_NetworkListPredicateHandler = new NetworkListPredicate(m_Player1OnServer, m_Player1OnClient1, NetworkListPredicate.NetworkListTestStates.ContainsLarge,20);
+            yield return WaitForConditionOrTimeOut(m_NetworkListPredicateHandler);
         }
 
         [UnityTest]
         public IEnumerator NetworkListContains([Values(true, false)] bool useHost)
         {
-            yield return InitializeServerAndClients(useHost);
-            m_Player1OnServer.TheList.Add(k_TestVal1);
+            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
+            yield return NetworkListAdd(useHost);
 
-            bool TestCompleted(int listCount)
-            {
-                return m_Player1OnServer.TheList.Count == listCount &&
-                       m_Player1OnClient1.TheList.Count == listCount &&
-                       m_Player1OnServer.TheList.Contains(k_TestVal1) &&
-                       m_Player1OnClient1.TheList.Contains(k_TestVal1);
-            }
-
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"Timed out waiting for {nameof(NetworkListContains)} to complete its test!");
+            // Now test the NetworkList.Contains method
+            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListPredicate.NetworkListTestStates.Contains);
+            yield return WaitForConditionOrTimeOut(m_NetworkListPredicateHandler);
         }
 
         [UnityTest]
         public IEnumerator NetworkListRemoveValue([Values(true, false)] bool useHost)
         {
-            yield return InitializeServerAndClients(useHost);
+            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
+            yield return NetworkListAdd(useHost);
 
-            m_Player1OnServer.TheList.Add(k_TestVal1);
-            m_Player1OnServer.TheList.Add(k_TestVal2);
-            m_Player1OnServer.TheList.Add(k_TestVal3);
+            // Remove a few entries by index
+            m_Player1OnServer.TheList.Remove(3);
+            m_Player1OnServer.TheList.Remove(5);
 
-            // Check to verify the client has 3 elements in the list
-            yield return WaitForConditionOrTimeOut((c) => m_Player1OnServer.TheList.Count == c && m_Player1OnClient1.TheList.Count == c, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"Timed out waiting for {nameof(NetworkListRemoveValue)} to check that " +
-                $"client has {m_Player1OnServer.TheList.Count} elements before removing one!");
-
-            // Now remove an element from the list
-            m_Player1OnServer.TheList.Remove(k_TestVal2);
-
-            // Test to assure the element was removed from the list on the client side
-            // and that the values are correct
-            bool TestCompleted(int listCount)
-            {
-                return m_Player1OnServer.TheList.Count == listCount &&
-                       m_Player1OnClient1.TheList.Count == listCount &&
-                       m_Player1OnServer.TheList[0] == k_TestVal1 &&
-                       m_Player1OnClient1.TheList[0] == k_TestVal1 &&
-                       m_Player1OnServer.TheList[1] == k_TestVal3 &&
-                       m_Player1OnClient1.TheList[1] == k_TestVal3;
-            }
-
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"Timed out waiting for {nameof(NetworkListRemoveValue)} to check that " +
-                $"the client removed the element from its list!");
+            // Really just verifies the data at this point
+            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListPredicate.NetworkListTestStates.Remove);
+            yield return WaitForConditionOrTimeOut(m_NetworkListPredicateHandler);
         }
 
         [UnityTest]
         public IEnumerator NetworkListInsert([Values(true, false)] bool useHost)
         {
-            yield return InitializeServerAndClients(useHost);
+            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
+            yield return NetworkListAdd(useHost);
 
-            m_Player1OnServer.TheList.Add(k_TestVal1);
-            m_Player1OnServer.TheList.Add(k_TestVal2);
+            // Now insert a random value entry to the list on the server
+            m_Player1OnServer.TheList.Insert(1,UnityEngine.Random.Range(1,99));
 
-            // Tests pre-insertion count and values as well
-            // as post-insertion count and values
-            bool TestCompleted(int listCount)
-            {
-                bool hasCorrectCountAndValues = m_Player1OnServer.TheList.Count == listCount &&
-                       m_Player1OnClient1.TheList.Count == listCount;
-
-                // Check the client values against the server values to make sure they match
-                for (int i = 0; i < listCount; i++)
-                {
-                    hasCorrectCountAndValues = hasCorrectCountAndValues && m_Player1OnServer.TheList[i] == m_Player1OnClient1.TheList[i];
-                    if (!hasCorrectCountAndValues)
-                    {
-                        break;
-                    }
-                }
-                return hasCorrectCountAndValues;
-            }
-
-            // Wait for the client to have the initial number of entries and have their values validated
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"{nameof(NetworkListInsert)} timed out waiting for client to have the initial number " +
-                $"of entries ({m_Player1OnServer.TheList.Count}) in its list an the values validated!");
-
-            // Now insert a new entry to the list on the server
-            m_Player1OnServer.TheList.Insert(1, k_TestVal3);
-
-            // Wait for the client to get updated and its values validated
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"{nameof(NetworkListInsert)} timed out waiting for client to have the final number " +
-                $"of entries ({m_Player1OnServer.TheList.Count}) in its list an the values validated!");
+            // Really just verifies the data at this point
+            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListPredicate.NetworkListTestStates.Insert);
+            yield return WaitForConditionOrTimeOut(m_NetworkListPredicateHandler);
         }
 
         [UnityTest]
         public IEnumerator NetworkListIndexOf([Values(true, false)] bool useHost)
         {
-            yield return InitializeServerAndClients(useHost);
+            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
+            yield return NetworkListAdd(useHost);
 
-            m_Player1OnServer.TheList.Add(k_TestVal1);
-            m_Player1OnServer.TheList.Add(k_TestVal2);
-            m_Player1OnServer.TheList.Add(k_TestVal3);
-
-            bool TestCompleted(int listCount)
-            {
-                bool hasCorrectCountAndValues = m_Player1OnServer.TheList.Count == listCount &&
-                       m_Player1OnClient1.TheList.Count == listCount;
-
-                // Check the client values against the server values to make sure they match
-                for (int i = 0; i < listCount; i++)
-                {
-                    hasCorrectCountAndValues = hasCorrectCountAndValues && m_Player1OnServer.TheList[i] == m_Player1OnClient1.TheList[i];
-                    if (!hasCorrectCountAndValues)
-                    {
-                        break;
-                    }
-                }
-                return hasCorrectCountAndValues;
-            }
-
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"Timed out waiting for {nameof(NetworkListIndexOf)} to complete its test!");
+            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListPredicate.NetworkListTestStates.IndexOf);
+            yield return WaitForConditionOrTimeOut(m_NetworkListPredicateHandler);
         }
 
         [UnityTest]
+        [Ignore("This is used several times already in the NetworkListPredicate")]
         public IEnumerator NetworkListArrayOperator([Values(true, false)] bool useHost)
         {
-            yield return InitializeServerAndClients(useHost);
-
-            bool TestCompleted(int listCount)
-            {
-                bool hasCorrectCountAndValues = m_Player1OnServer.TheList.Count == listCount &&
-                       m_Player1OnClient1.TheList.Count == listCount;
-
-                // Check the client values against the server values to make sure they match
-                for (int i = 0; i < listCount; i++)
-                {
-                    hasCorrectCountAndValues = hasCorrectCountAndValues && m_Player1OnServer.TheList[i] == m_Player1OnClient1.TheList[i];
-                    if (!hasCorrectCountAndValues)
-                    {
-                        break;
-                    }
-                }
-                return hasCorrectCountAndValues;
-            }
-
-            m_Player1OnServer.TheList.Add(k_TestVal3);
-            m_Player1OnServer.TheList.Add(k_TestVal3);
-
-            // Make sure the client has the initial values
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"{nameof(NetworkListArrayOperator)} timed out waiting for client to have the initial values!");
-
-            // Change the values pn server side using the array operator
-            m_Player1OnServer.TheList[0] = k_TestVal1;
-            m_Player1OnServer.TheList[1] = k_TestVal2;
-
-            // Make sure the client has the updated values
-            yield return WaitForConditionOrTimeOut(TestCompleted, m_Player1OnServer.TheList.Count);
-            Assert.IsFalse(s_GloabalTimeOutHelper.TimedOut, $"{nameof(NetworkListArrayOperator)} timed out waiting for client to have the updated values!");
+            yield return NetworkListAdd(useHost);
         }
 
 
@@ -716,6 +636,7 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTearDown]
         public override IEnumerator Teardown()
         {
+            m_NetworkListPredicateHandler = null;
             yield return base.Teardown();
         }
     }
