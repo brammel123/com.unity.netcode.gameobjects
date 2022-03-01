@@ -154,7 +154,7 @@ namespace Unity.Netcode
                             }
                         }
 
-                        if (networkManager.IsServer)
+                        if (networkManager.IsServer && networkObject.OwnerClientId != context.SenderId)
                         {
                             // we are choosing not to fire an exception here, because otherwise a malicious client could use this to crash the server
                             if (networkManager.NetworkConfig.EnsureNetworkVariableLengthSafety)
@@ -187,6 +187,11 @@ namespace Unity.Netcode
                         int readStartPos = m_ReceivedNetworkVariableData.Position;
 
                         behaviour.NetworkVariableFields[i].ReadDelta(m_ReceivedNetworkVariableData, networkManager.IsServer);
+
+                        if (networkManager.IsServer && !networkObject.IsOwnedByServer)
+                        {
+                            behaviour.NetworkVariableFields[i].SetDirty(true);
+                        }
 
                         networkManager.NetworkMetrics.TrackNetworkVariableDeltaReceived(
                             context.SenderId,
