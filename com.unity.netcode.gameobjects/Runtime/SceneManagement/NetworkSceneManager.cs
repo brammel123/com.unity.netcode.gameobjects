@@ -324,6 +324,8 @@ namespace Unity.Netcode
         /// </summary>
         private class DefaultSceneManagerHandler : ISceneManagerHandler
         {
+
+            private NetworkManager m_NetworkManager;
             public AsyncOperation LoadSceneAsync(string sceneName, LoadSceneMode loadSceneMode, ISceneManagerHandler.SceneEventAction sceneEventAction)
             {
                 var operation = SceneManager.LoadSceneAsync(sceneName, loadSceneMode);
@@ -337,9 +339,50 @@ namespace Unity.Netcode
                 operation.completed += new Action<AsyncOperation>(asyncOp2 => { sceneEventAction.Invoke(); });
                 return operation;
             }
+
+            /// <summary>
+            /// The default scene placed NetworkObject filter
+            /// </summary>
+            public bool NetworkObjectFilter(NetworkObject networkObject, Scene sceneToFilterBy)
+            {
+                // First filter by scene handle to assure it exists in the scene just loaded and by the owning NetworkManager instance
+                if (networkObject.gameObject.scene.handle == sceneToFilterBy.handle && networkObject.NetworkManager == m_NetworkManager)
+                {
+                    // Then for all non-assigned/yet to be spawned locally
+                    if (networkObject.IsSceneObject == null)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            // The Default ProcessScenePlacedNetworkObject Behavior
+            public void ProcessScenePlacedNetworkObject(Scene scene, NetworkObject networkObject)
+            {
+                var sceneManager = networkObject.NetworkManager.SceneManager;
+
+                if (!sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash].ContainsKey(networkObject.gameObject.scene.handle))
+                {
+                    sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash].Add(networkObject.gameObject.scene.handle, networkObject);
+                }
+                else
+                {
+                    var exitingEntryName = sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash][networkObject.gameObject.scene.handle] != null ?
+                        sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash][networkObject.gameObject.scene.handle].name : "Null Entry";
+                    throw new Exception($"{networkObject.name} tried to registered with {nameof(sceneManager.ScenePlacedObjects)} which already contains " +
+                        $"the same {nameof(NetworkObject.GlobalObjectIdHash)} value {networkObject.GlobalObjectIdHash} for {exitingEntryName}!");
+                }
+
+            }
+
+            public DefaultSceneManagerHandler(NetworkManager networkManager)
+            {
+                m_NetworkManager = networkManager;
+            }
         }
 
-        internal ISceneManagerHandler SceneManagerHandler = new DefaultSceneManagerHandler();
+        internal ISceneManagerHandler SceneManagerHandler;
         /// End of Proof of Concept
 
 
@@ -579,7 +622,9 @@ namespace Unity.Netcode
         /// <param name="sceneEventDataPoolSize">maximum <see cref="SceneEventData"/> pool size</param>
         internal NetworkSceneManager(NetworkManager networkManager)
         {
+
             m_NetworkManager = networkManager;
+            SceneManagerHandler = new DefaultSceneManagerHandler(networkManager);
             SceneEventDataStore = new Dictionary<uint, SceneEventData>();
 
             GenerateScenesInBuild();
@@ -1837,7 +1882,7 @@ namespace Unity.Netcode
                 ScenePlacedObjects.Clear();
             }
 
-            var networkObjects = UnityEngine.Object.FindObjectsOfType<NetworkObject>();
+            var networkObjects = UnityEngine.Object.FindObjectsOfType<NetworkObject>().Where((c) => SceneManagerHandler.NetworkObjectFilter(c, sceneToFilterBy));
 
             // Just add every NetworkObject found that isn't already in the list
             // With additive scenes, we can have multiple in-scene placed NetworkObjects with the same GlobalObjectIdHash value
@@ -1845,27 +1890,12 @@ namespace Unity.Netcode
             // at the end of scene loading we use this list to soft synchronize all in-scene placed NetworkObjects
             foreach (var networkObjectInstance in networkObjects)
             {
-                // We check to make sure the NetworkManager instance is the same one to be "NetcodeIntegrationTestHelpers" compatible and filter the list on a per scene basis (additive scenes)
-                if (networkObjectInstance.IsSceneObject == null && networkObjectInstance.NetworkManager == m_NetworkManager && networkObjectInstance.gameObject.scene == sceneToFilterBy &&
-                    networkObjectInstance.gameObject.scene.handle == sceneToFilterBy.handle)
+                if (!ScenePlacedObjects.ContainsKey(networkObjectInstance.GlobalObjectIdHash))
                 {
-                    if (!ScenePlacedObjects.ContainsKey(networkObjectInstance.GlobalObjectIdHash))
-                    {
-                        ScenePlacedObjects.Add(networkObjectInstance.GlobalObjectIdHash, new Dictionary<int, NetworkObject>());
-                    }
-
-                    if (!ScenePlacedObjects[networkObjectInstance.GlobalObjectIdHash].ContainsKey(networkObjectInstance.gameObject.scene.handle))
-                    {
-                        ScenePlacedObjects[networkObjectInstance.GlobalObjectIdHash].Add(networkObjectInstance.gameObject.scene.handle, networkObjectInstance);
-                    }
-                    else
-                    {
-                        var exitingEntryName = ScenePlacedObjects[networkObjectInstance.GlobalObjectIdHash][networkObjectInstance.gameObject.scene.handle] != null ?
-                            ScenePlacedObjects[networkObjectInstance.GlobalObjectIdHash][networkObjectInstance.gameObject.scene.handle].name : "Null Entry";
-                        throw new Exception($"{networkObjectInstance.name} tried to registered with {nameof(ScenePlacedObjects)} which already contains " +
-                            $"the same {nameof(NetworkObject.GlobalObjectIdHash)} value {networkObjectInstance.GlobalObjectIdHash} for {exitingEntryName}!");
-                    }
+                    ScenePlacedObjects.Add(networkObjectInstance.GlobalObjectIdHash, new Dictionary<int, NetworkObject>());
                 }
+                // Now let the SceneManagerHandler do the rest of the processing
+                SceneManagerHandler.ProcessScenePlacedNetworkObject(sceneToFilterBy, networkObjectInstance);
             }
         }
 

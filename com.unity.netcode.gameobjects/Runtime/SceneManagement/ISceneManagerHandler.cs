@@ -24,5 +24,9 @@ namespace Unity.Netcode
         AsyncOperation LoadSceneAsync(string sceneName, LoadSceneMode loadSceneMode, SceneEventAction sceneEventAction);
 
         AsyncOperation UnloadSceneAsync(Scene scene, SceneEventAction sceneEventAction);
+
+        void ProcessScenePlacedNetworkObject(Scene scene, NetworkObject networkObject);
+
+        bool NetworkObjectFilter(NetworkObject networkObject, Scene sceneToFilterBy);
     }
 }

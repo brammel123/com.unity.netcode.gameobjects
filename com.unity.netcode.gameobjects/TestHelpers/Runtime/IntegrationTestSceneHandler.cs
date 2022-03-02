@@ -26,6 +26,8 @@ namespace Unity.Netcode.TestHelpers.Runtime
 
         internal List<Coroutine> CoroutinesRunning = new List<Coroutine>();
 
+        protected NetworkManager m_NetworkManager;
+
         /// <summary>
         /// Used to control when clients should attempt to fake-load a scene
         /// Note: Unit/Integration tests that only use <see cref="NetcodeIntegrationTestHelpers"/>
@@ -79,27 +81,31 @@ namespace Unity.Netcode.TestHelpers.Runtime
             sceneEventAction.Invoke();
         }
 
-        public AsyncOperation LoadSceneAsync(string sceneName, LoadSceneMode loadSceneMode, ISceneManagerHandler.SceneEventAction sceneEventAction)
+        protected virtual AsyncOperation OnLoadSceneAsync(string sceneName, LoadSceneMode loadSceneMode, ISceneManagerHandler.SceneEventAction sceneEventAction)
         {
             CoroutinesRunning.Add(CoroutineRunner.StartCoroutine(ClientLoadSceneCoroutine(sceneName, sceneEventAction)));
             // This is OK to return a "nothing" AsyncOperation since we are simulating client loading
             return new AsyncOperation();
         }
 
-        public AsyncOperation UnloadSceneAsync(Scene scene, ISceneManagerHandler.SceneEventAction sceneEventAction)
+        public AsyncOperation LoadSceneAsync(string sceneName, LoadSceneMode loadSceneMode, ISceneManagerHandler.SceneEventAction sceneEventAction)
+        {
+            return OnLoadSceneAsync(sceneName, loadSceneMode, sceneEventAction);
+        }
+
+        protected virtual AsyncOperation OnUnloadSceneAsync(Scene scene, ISceneManagerHandler.SceneEventAction sceneEventAction)
         {
             CoroutinesRunning.Add(CoroutineRunner.StartCoroutine(ClientUnloadSceneCoroutine(sceneEventAction)));
             // This is OK to return a "nothing" AsyncOperation since we are simulating client loading
             return new AsyncOperation();
         }
 
-        public IntegrationTestSceneHandler()
+        public AsyncOperation UnloadSceneAsync(Scene scene, ISceneManagerHandler.SceneEventAction sceneEventAction)
         {
-            if (CoroutineRunner == null)
-            {
-                CoroutineRunner = new GameObject("UnitTestSceneHandlerCoroutine").AddComponent<CoroutineRunner>();
-            }
+            return OnUnloadSceneAsync(scene, sceneEventAction);
         }
+
+
 
         public void Dispose()
         {
@@ -111,5 +117,68 @@ namespace Unity.Netcode.TestHelpers.Runtime
 
             Object.Destroy(CoroutineRunner.gameObject);
         }
+
+        protected bool OnNetworkObjectFilter(NetworkObject networkObject, Scene sceneToFilterBy)
+        {
+            // First filter by scene handle to assure it exists in the scene just loaded and by the owning NetworkManager instance
+            if (networkObject.gameObject.scene.handle == sceneToFilterBy.handle && networkObject.NetworkManager == m_NetworkManager)
+            {
+                // Then for all non-assigned/yet to be spawned locally
+                if (networkObject.IsSceneObject == null)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The default scene placed NetworkObject filter
+        /// </summary>
+        public bool NetworkObjectFilter(NetworkObject networkObject, Scene sceneToFilterBy)
+        {
+            return OnNetworkObjectFilter(networkObject, sceneToFilterBy);
+        }
+
+        protected virtual void OnProcessScenePlacedNetworkObject(Scene scene, NetworkObject networkObject)
+        {
+            var sceneManager = networkObject.NetworkManager.SceneManager;
+
+            if (!sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash].ContainsKey(networkObject.gameObject.scene.handle))
+            {
+                sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash].Add(networkObject.gameObject.scene.handle, networkObject);
+            }
+            else
+            {
+                var exitingEntryName = sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash][networkObject.gameObject.scene.handle] != null ?
+                    sceneManager.ScenePlacedObjects[networkObject.GlobalObjectIdHash][networkObject.gameObject.scene.handle].name : "Null Entry";
+                throw new Exception($"{networkObject.name} tried to registered with {nameof(sceneManager.ScenePlacedObjects)} which already contains " +
+                    $"the same {nameof(NetworkObject.GlobalObjectIdHash)} value {networkObject.GlobalObjectIdHash} for {exitingEntryName}!");
+            }
+        }
+
+        // Mirror the default action to throw an exception
+        public void ProcessScenePlacedNetworkObject(Scene scene, NetworkObject networkObject)
+        {
+            OnProcessScenePlacedNetworkObject(scene, networkObject);
+        }
+
+        public IntegrationTestSceneHandler(NetworkManager networkManager)
+        {
+            m_NetworkManager = networkManager;
+
+            if (CoroutineRunner == null)
+            {
+                CoroutineRunner = new GameObject("UnitTestSceneHandlerCoroutine").AddComponent<CoroutineRunner>();
+            }
+        }
+
+        //public IntegrationTestSceneHandler()
+        //{
+        //    if (CoroutineRunner == null)
+        //    {
+        //        CoroutineRunner = new GameObject("UnitTestSceneHandlerCoroutine").AddComponent<CoroutineRunner>();
+        //    }
+        //}
     }
 }
