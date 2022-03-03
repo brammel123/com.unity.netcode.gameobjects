@@ -793,19 +793,30 @@ namespace Unity.Netcode
 
         internal void InvokeBehaviourNetworkSpawn()
         {
+            // First run through the InternalOnNetworkSpawns for all child NetworkBehaviours
             for (int i = 0; i < ChildNetworkBehaviours.Count; i++)
             {
                 ChildNetworkBehaviours[i].InternalOnNetworkSpawn();
+            }
+
+            //Finally invoke all child NetworkBehaviours' OnNetworkSpawn
+            for (int i = 0; i < ChildNetworkBehaviours.Count; i++)
+            {
                 ChildNetworkBehaviours[i].OnNetworkSpawn();
             }
         }
-
         internal void InvokeBehaviourNetworkDespawn()
         {
+            // First invoke all child NetworkBehaviours' OnNetworkDespawn
+            for (int i = 0; i < ChildNetworkBehaviours.Count; i++)
+            {
+                ChildNetworkBehaviours[i].OnNetworkDespawn();
+            }
+
+            // Finally invoke all child NetworkBehaviours' InternalOnNetworkDespawn
             for (int i = 0; i < ChildNetworkBehaviours.Count; i++)
             {
                 ChildNetworkBehaviours[i].InternalOnNetworkDespawn();
-                ChildNetworkBehaviours[i].OnNetworkDespawn();
             }
         }
 
