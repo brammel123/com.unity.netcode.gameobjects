@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Additional documentation and release notes are available at [Multiplayer Documentation](https://docs-multiplayer.unity3d.com).
+## [Unreleased]
+### Added
+### Changed
+### Fixed
+- Fixed issue when spawning new player if an already existing player exists it does not remove IsPlayer from the previous player (#1779)
 
 ## [1.0.0-pre.6] - 2022-03-02
 
@@ -33,6 +38,7 @@ Additional documentation and release notes are available at [Multiplayer Documen
 - Fixed OwnedObjects not being properly modified when using ChangeOwnership (#1731)
 - Improved performance in NetworkAnimator (#1735)
 - Removed the "always sync" network animator (aka "autosend") parameters (#1746)
+- Fixed in-scene placed NetworkObjects not respawning after shutting down the NetworkManager and then starting it back up again (#1769)
 
 ## [1.0.0-pre.5] - 2022-01-26
 
